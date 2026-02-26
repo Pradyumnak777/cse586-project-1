@@ -16,18 +16,15 @@ this code seems to be reading the sample .npz file under the VPoserModelFiles fo
 main dataset to be trained/tested on is AMASS_CMUsubset(?)
 '''
 
-def path_setup(support_dir):
-    #filenames for loading VPoser VAE network, neutral SMPL body model, AMASS sample data
-    expr_dir = osp.join(support_dir,'vposer_v2_05/') #'TRAINED_MODEL_DIRECTORY'
-    bm_fname =  osp.join(support_dir,'smplx_neutral_model.npz')    #'PATH_TO_SMPLX_model.npz'  neutral smpl body model
-    sample_amass_fname = osp.join(support_dir, 'amass_sample.npz')  # a sample npz file from AMASS
+def path_setup(vposer_dir, amass_dir, sub_pose):
+    expr_dir = osp.join(vposer_dir, 'vposer_v2_05/') 
     
-    print(expr_dir)
-    print(bm_fname)
-    print(sample_amass_fname)
+    sample_amass_fname = osp.join(amass_dir, sub_pose)  
     
-    return expr_dir, bm_fname, sample_amass_fname
-
+    print(f"Loading Model from: {expr_dir}")
+    print(f"Loading Data from: {sample_amass_fname}")
+    
+    return expr_dir, sample_amass_fname
 
 def body_model_loading(bm_fname, device):
     #Loading SMPLx Body Model
