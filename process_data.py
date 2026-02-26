@@ -67,3 +67,4 @@ if __name__ == "__main__":
     make_latents()
     
     #import this dataset class in some other file after transformer arch is finished, to train.
+    # latents_dict = torch.load('vposer_latents.pt')
