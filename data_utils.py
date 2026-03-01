@@ -39,16 +39,16 @@ def make_latents():
 
 
 class Data_VAE(Dataset):
-    def __init__(self, latents_dict, window=1): #latents_dict is already tensors..
-        self.train_data = [] #need to structure like - (curr_pose, curr_pose + 1(time)), for all the subjects/actions
+    def __init__(self, latents_dict, window=1, context=1): #latents_dict is already tensors..
+        self.train_data = [] #need to structure like - (curr_pose(s), curr_pose + 1(time)), for all the subjects/actions
         
         for k,v in latents_dict.items():
             #get frames for THIS video/pose seq
             num_frames = v.shape[0]
             
-            for t in range(num_frames-window): #time
-                curr_pose = v[t]
-                next_pose = v[t+window]
+            for t in range(num_frames-(context+window)+1): #time
+                curr_pose = v[t:t+context] #multiple frames for context
+                next_pose = v[t+context+window-1]
                 
                 self.train_data.append((curr_pose, next_pose))
         
@@ -58,7 +58,7 @@ class Data_VAE(Dataset):
     def __getitem__(self, idx):
         #for now, predicting consecutive frames. change later? change window param
         cur, next = self.train_data[idx]
-        return cur, next
+        return cur, next #eg- ([f1, f2, f3], f4)
         
         
 
