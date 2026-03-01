@@ -36,7 +36,7 @@ dependencies:
       - antlr4-python3-runtime==4.9.3
       - filelock==3.24.3
       - fsspec==2026.2.0
-      - human-body-prior==2.3.0
+      - git+https://github.com/nghorbani/human_body_prior.git
       - jinja2==3.1.6
       - loguru==0.7.3
       - markupsafe==3.0.3

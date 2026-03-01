@@ -5,7 +5,7 @@ from data_utils import Data_VAE
 
 #this is where the model will hopefully be invoked and the training will actually happen.
 
-latents_dict = torch.load('vposer_latents.pt')
+latents_dict = torch.load('vposer_latents.pt', weights_only=True)
 
 '''
 CHANGE below for tweaking how dataloader works.
