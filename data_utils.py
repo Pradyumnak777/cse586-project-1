@@ -40,7 +40,7 @@ def make_latents():
 
 class Data_VAE(Dataset):
     def __init__(self, latents_dict, window=1, context=1): #latents_dict is already tensors..
-        self.train_data = [] #need to structure like - (curr_pose(s), curr_pose + 1(time)), for all the subjects/actions
+        self.train_data = [] #need to structure like - (curr_pose(s), last_curr_pose + 1(time)), for all the subjects/actions
         
         for k,v in latents_dict.items():
             #get frames for THIS video/pose seq
