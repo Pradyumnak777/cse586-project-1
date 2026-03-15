@@ -61,7 +61,7 @@ def pose_encode(vp, amass_body_pose):
 def pose_decode(vp, amass_body_poZ):
     # run the decoder on all frames
     amass_body_pose_rec = vp.decode(amass_body_poZ)['pose_body'].contiguous().view(-1, 63)
-    print('amass_body_pose_rec.shape', amass_body_pose_rec.shape)
+    # print('amass_body_pose_rec.shape', amass_body_pose_rec.shape) #to avoiud the insanely numerous print statements in train loop
     return amass_body_pose_rec
 
 
