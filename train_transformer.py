@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split
 from vPoser_test import pose_decode
 from human_body_prior.tools.model_loader import load_model
 from human_body_prior.models.vposer_model import VPoser
+from data_utils import Data_VAE_time
 
 '''
 VAE setup, for decoding for MPJPE loss
@@ -85,30 +86,39 @@ def main():
     print("Using device:", device)
     print("Using seed:", seed)
 
+    #const stuff
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    fps = 30
+    context_window = 2 #in seconds
+    pred_window = 0.033 #in seconds. predict 0.033s into the future
+    batch_size = 128    
+    
     latents_path = os.path.join(BASE_DIR, "vposer_latents.pt")
     latents_dict = torch.load(latents_path, map_location="cpu")
     #latents seem to be loaded at this point..
 
-    # ---- split by sequence keys ----
     keys = list(latents_dict.keys())
-    train_keys, test_keys = train_test_split(keys, test_size=0.2, random_state=420)
+    train_keys, test_keys = train_test_split(keys, test_size=0.2, random_state=420) #this isout train/test split
 
     train_latents = {k: latents_dict[k] for k in train_keys} #so this is 01_01...? (file name)
     test_latents  = {k: latents_dict[k] for k in test_keys} 
 
-    #params
-    window = 1 #predicting "immediate" frame, true autorgression? change to 5 to predict 5 frames COLLECTIVELY
-    context = 20  #looking at 20 frames/poses
-    batch_size = 128    
-    epochs = 5
+    # #params
+    # window = 1 #predicting "immediate" frame, true autorgression? change to 5 to predict 5 frames COLLECTIVELY
+    # context = 20  #looking at 20 frames/poses
+    
+    epochs = 10
     lr = 2e-4
     noise_std = 0.01 #why this? does it help?
 
     loader_gen = torch.Generator().manual_seed(seed)
 
-    train_ds = Data_VAE(train_latents, window=window, context=context) #train latents
-    test_ds  = Data_VAE(test_latents,  window=window, context=context) #test latents
+    
+    '''
+    BELOW IS FOR LONG TIME HORIZON (predicint x seconds into the future instead of immediate next frame!)
+    '''
+    train_ds = Data_VAE_time(train_latents, window_sec=pred_window, context_sec=context_window, fps=fps)
+    test_ds  = Data_VAE_time(test_latents,  window_sec=pred_window, context_sec=context_window, fps=fps)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True, generator=loader_gen)
     test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, num_workers=0, drop_last=False, generator=loader_gen)
@@ -122,7 +132,7 @@ def main():
     mean = mean.to(device)
     std  = std.to(device)
 
-    # ---- model ----
+    #model
     model = NextLatentTransformer(d_in=32, d_model=128, nhead=4, num_layers=3, dropout=0.1).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
     # loss_fn = nn.SmoothL1Loss()
@@ -154,7 +164,7 @@ def main():
             '''
             Adding MPJPE loss below!!
             '''
-            pred_latent = (pred * std) + mean
+            pred_latent = (pred * std) + mean #un normalizing
             gt_latent = (y * std) + mean
             #decode ts
             decoded_pred_pose = pose_decode(vp, pred_latent) 
@@ -183,113 +193,112 @@ def main():
         avg_train_tot = train_total_sum / len(train_loader)
         print(f"Epoch {ep} TRAIN | Total: {avg_train_tot:.4f} | Latent (MAE): {avg_train_lat:.4f} | Physical (MPJPE): {avg_train_mpj:.4f}m", flush=True)
         
-        # test
-        print(f"--- Phase: Testing ---", flush=True)
-        model.eval()
-        test_latent_sum = 0.0
-        test_mpjpe_sum = 0.0
-        test_total_sum = 0.0
+        # # test
+        # print(f"--- Phase: Testing ---", flush=True)
+        # model.eval()
+        # test_latent_sum = 0.0
+        # test_mpjpe_sum = 0.0
+        # test_total_sum = 0.0
 
-        with torch.no_grad():
-            for x, y in test_loader:
-                x, y = x.to(device).float(), y.to(device).float()
+        # with torch.no_grad():
+        #     for x, y in test_loader:
+        #         x, y = x.to(device).float(), y.to(device).float()
                 
-                # Normalize
-                x_norm = (x - mean) / std
-                y_norm = (y - mean) / std
+        #         # Normalize
+        #         x_norm = (x - mean) / std
+        #         y_norm = (y - mean) / std
                 
-                # Predict
-                pred_norm = model(x_norm)
+        #         # Predict
+        #         pred_norm = model(x_norm)
                 
-                # 1. Latent MAE
-                batch_loss_latent = loss_fn(pred_norm, y_norm)
-                test_latent_sum += batch_loss_latent.item()
+        #         # 1. Latent MAE
+        #         batch_loss_latent = loss_fn(pred_norm, y_norm)
+        #         test_latent_sum += batch_loss_latent.item()
                 
-                # 2. MPJPE (un-normalize first)
-                pred_latent = (pred_norm * std) + mean
-                gt_latent = y # Ground truth is already un-normalized in the original dict
+        #         # 2. MPJPE (un-normalize first)
+        #         pred_latent = (pred_norm * std) + mean
+        #         gt_latent = y # Ground truth is already un-normalized in the original dict
                 
-                decoded_pred = pose_decode(vp, pred_latent)
-                decoded_gt = pose_decode(vp, gt_latent)
+        #         decoded_pred = pose_decode(vp, pred_latent)
+        #         decoded_gt = pose_decode(vp, gt_latent)
                 
-                # Get 3D joints for evaluation
-                pj = bm(pose_body=decoded_pred).Jtr[:, :23, :]
-                gj = bm(pose_body=decoded_gt).Jtr[:, :23, :]
+        #         # Get 3D joints for evaluation
+        #         pj = bm(pose_body=decoded_pred).Jtr[:, :23, :]
+        #         gj = bm(pose_body=decoded_gt).Jtr[:, :23, :]
                 
-                batch_mpjpe = torch.mean(torch.norm(pj - gj, dim=-1))
-                test_mpjpe_sum += batch_mpjpe.item()
+        #         batch_mpjpe = torch.mean(torch.norm(pj - gj, dim=-1))
+        #         test_mpjpe_sum += batch_mpjpe.item()
                 
-                batch_total_loss = batch_loss_latent + (0.1 * batch_mpjpe)
-                test_total_sum += batch_total_loss.item()
+        #         batch_total_loss = batch_loss_latent + (0.1 * batch_mpjpe)
+        #         test_total_sum += batch_total_loss.item()
             
             
-            avg_test_lat = test_latent_sum / len(test_loader)
-            avg_test_mpj = test_mpjpe_sum / len(test_loader)
-            avg_test_tot = test_total_sum / len(test_loader)
-            print(f"Epoch {ep} TEST  | Total: {avg_test_tot:.4f} | Latent (MAE): {avg_test_lat:.4f} | Physical (MPJPE): {avg_test_mpj:.4f}m", flush=True)
+        #     avg_test_lat = test_latent_sum / len(test_loader)
+        #     avg_test_mpj = test_mpjpe_sum / len(test_loader)
+        #     avg_test_tot = test_total_sum / len(test_loader)
+        #     print(f"Epoch {ep} TEST  | Total: {avg_test_tot:.4f} | Latent (MAE): {avg_test_lat:.4f} | Physical (MPJPE): {avg_test_mpj:.4f}m", flush=True)
             
-        torch.save(model.state_dict(), os.path.join(BASE_DIR, f"test_models_context_20_k_1/transformer_ep{ep}.pt"))
+        save_dir = os.path.join(BASE_DIR, f"test_models_context_{context_window}_k_1")
+        os.makedirs(save_dir, exist_ok=True)
+        torch.save(model.state_dict(), os.path.join(save_dir, f"transformer_ep{ep}.pt"))
 
-    '''
-    ok so for rollout, its like chatgpt.
-    [p1, p2,..,p20] : input
-    p21 : output
     
-    Now, instead of just using the groundtruth p21 to predict p22 like in testing, here p21 is p21*(model output previously)
-    [p2, p3..,p21*] : input
-    p22 : output
-    '''
-    print("\n--- doing ROLLOUT ---")
-    model.eval()
-    horizons = [30, 60, 90, 150] #where stats are printed out
-    horizon_mae = {h: [] for h in horizons}
+    # print("\n--- doing ROLLOUT ---")
+    # model.eval()
     
-    with torch.no_grad():
-        for key in test_keys:
-            full_seq = test_latents[key].to(device).float()
-            # Ensure sequence is long enough for history + 200 frame forecast
-            if full_seq.shape[0] < (context + 200):
-                continue 
+    # # #fix: Calculate frame counts from seconds once
+    # c_frames = int(round(context_window * fps)) # 2 * 30 = 60
+    
+    # eval_seconds = [1.0, 2.0, 3.0, 5.0]
+    # horizons = [int(round(s * fps)) for s in eval_seconds]
+    # horizon_mae = {h: [] for h in horizons}
+    
+    # with torch.no_grad():
+    #     for key in test_keys:
+    #         full_seq = test_latents[key].to(device).float()
+            
+    #         # #fix: Compare frames to frames, not frames to seconds
+    #         if full_seq.shape[0] < (c_frames + 200):
+    #             continue 
                 
-            # start with first 20 frames of ground truth context
-            init_context = full_seq[:context] 
-            init_context_norm = (init_context - mean) / std
+    #         # #fix: Use frame count for slicing
+    #         init_context = full_seq[:c_frames] 
+    #         init_context_norm = (init_context - mean) / std
             
-            #actual rllout
-            preds_norm = rollout_autoreg(model, init_context_norm, H=200, device=device) #does for all 200
-            #doing rollout for 200 times, i.e, window slides 200 times. So last will be- [p200*, p201*, ... , p219*]: input;
-            # p220* : output
+    #         # This generates 200 frames of future motion
+    #         preds_norm = rollout_autoreg(model, init_context_norm, H=200, device=device) 
             
-            gt_rollout = full_seq[context : context + 200]
-            gt_rollout_norm = ((gt_rollout - mean) / std).to(device) #ground truth for the 220 frames (cuz context is 20)
+    #         # #fix: Slicing ground truth starting from the end of context frames
+    #         gt_rollout = full_seq[c_frames : c_frames + 200]
+    #         gt_rollout_norm = ((gt_rollout - mean) / std).to(device)
             
-            for h in horizons:
-                # Track latent drift at milestone h
-                err = torch.mean(torch.abs(preds_norm[h-1].to(device) - gt_rollout_norm[h-1]))
-                horizon_mae[h].append(err.item())
+    #         for h in horizons:
+    #             if h <= len(preds_norm):
+    #                 err = torch.mean(torch.abs(preds_norm[h-1].to(device) - gt_rollout_norm[h-1]))
+    #                 horizon_mae[h].append(err.item())
     
-    print("\n================ Rollout Statistics (Normalized Latent MAE) ================")
-    print(f"{'Time':<20} | {'Frames':<10} | {'Mean Error':<15}")
-    print("-" * 55)
-    for h in horizons:
-        avg_err = np.mean(horizon_mae[h])
-        time_sec = h / 30.0 
-        print(f"{time_sec:>4.1f} seconds {h:>10} frames {avg_err:>15.4f}")
-    print("============================================================================")   
+    # print("\n Rollout Statistics (Normalized Latent MAE)")
+    # print(f"{'Time':<20} | {'Frames':<10} | {'Mean Error':<15}")
+    # print("-" * 55)
+    # for h in horizons:
+    #     avg_err = np.mean(horizon_mae[h])
+    #     time_sec = h / 30.0 
+    #     print(f"{time_sec:>4.1f} seconds {h:>10} frames {avg_err:>15.4f}")
+    # print("===END!!===")   
     
-    '''
-    below doesnt make sense, just saving transfoermer model instead...
-    '''
-    # torch.save({
-    #     "context_norm": init_context_norm.detach().cpu(),
-    #     "pred_latents_norm": pred_latents_norm.cpu(),
-    #     "mean": mean.detach().cpu(),
-    #     "std": std.detach().cpu(),
-    #     "context_len": context,
-    #     "rollout_len": H
-    # }, os.path.join(BASE_DIR, "pred_latents.pt"))
+    # '''
+    # below doesnt make sense, just saving transfoermer model instead...
+    # '''
+    # # torch.save({
+    # #     "context_norm": init_context_norm.detach().cpu(),
+    # #     "pred_latents_norm": pred_latents_norm.cpu(),
+    # #     "mean": mean.detach().cpu(),
+    # #     "std": std.detach().cpu(),
+    # #     "context_len": context,
+    # #     "rollout_len": H
+    # # }, os.path.join(BASE_DIR, "pred_latents.pt"))
 
-    # print("Saved pred_latents.pt (normalized preds + mean/std).")
+    # # print("Saved pred_latents.pt (normalized preds + mean/std).")
 
 if __name__ == "__main__":
     main()
