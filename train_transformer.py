@@ -53,7 +53,6 @@ def set_seed(seed):
 
 
 def compute_train_stats(train_latents: dict, max_frames_per_seq=2000):
-    # fast, stable stats for D=32
     chunks = []
     for _, v in train_latents.items():
         if not isinstance(v, torch.Tensor) or v.ndim != 2:
@@ -127,7 +126,6 @@ def main():
     x0, y0 = next(iter(train_loader))
     print("Batch shapes:", x0.shape, y0.shape)  # expect (B, 20, 32)-input and (B, 32)-ground truth
 
-    # ---- normalization computed from TRAIN only ----
     mean, std = compute_train_stats(train_latents)
     mean = mean.to(device)
     std  = std.to(device)

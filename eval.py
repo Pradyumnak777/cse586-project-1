@@ -14,7 +14,7 @@ from human_body_prior.tools.omni_tools import copy2cpu as c2c
 
 
 
-#helper to compute stats so we can un-normalize later
+#helper to compute stats
 def compute_train_stats(train_latents: dict, max_frames_per_seq=2000):
     chunks = []
     for _, v in train_latents.items():
@@ -28,7 +28,7 @@ def compute_train_stats(train_latents: dict, max_frames_per_seq=2000):
 
 #the loop that makes model predict the future 
 '''
-    ok so for rollout, its like chatgpt/autoregression. 
+    ok so for rollout, its like autoregression. 
     [p1, p2,..,p20] : input
     p21 : output
     
@@ -78,7 +78,7 @@ def main():
     train_latents = {k: latents_dict[k] for k in train_keys}
     test_latents  = {k: latents_dict[k] for k in test_keys} 
 
-    #get the mean and std to un-normalize predictions
+    #nned to un-normalize..
     '''
     seems like the predictions also need to be un-normed to calculate MPJPE. did this in training too..
     '''
@@ -95,7 +95,7 @@ def main():
     model.eval()
 
     #define the time horizons in pdf
-    eval_seconds = [0.08, 0.32, 1.0, 2.0, 5.0] 
+    eval_seconds = [0.067, 0.333, 1.0, 2.0, 5.0] 
     horizons = [int(round(s * fps)) for s in eval_seconds] #in frames
     max_h = max(horizons) #we only need to rollout as far as our max horizon
     
@@ -112,34 +112,32 @@ def main():
         for key in test_keys:
             full_seq = test_latents[key].to(device).float()
             
-            #skip if the video is too short to evaluate
             if full_seq.shape[0] < (c_frames + max_h):
                 continue 
                 
-            #grab context in normalized space for the transformer
+            #get ocntext
             init_context = full_seq[:c_frames] #c_frames is context, but in frames
             init_context_norm = (init_context - mean) / std
             
-            #do the rollout
+            #doing rollout
             preds_norm = rollout_autoreg(model, init_context_norm, H=max_h, device=device) #rollout for 150 frames
             
-            #grab the ground truth (already un-normalized)
+            #get gt (already un-normalized)
             gt_rollout = full_seq[c_frames : c_frames + max_h]
             
-            #baseline setup (doing this in raw un-normalized space is easier)
             last_frame = init_context[-1] #60th frame in this case
             penultimate_frame = init_context[-2] #59th frame
             velocity = last_frame - penultimate_frame
             
             #evaluate only at the specific horizons to save computation time
             for h in horizons:
-                #1. transformer setup (un-normalize it first)
+                #transformer output using rollout (did just before)
                 trans_latent = (preds_norm[h-1].to(device) * std) + mean #un_normed transformer output at this 'h' step
                 
-                #2. zero velocity setup (just repeating the last frame)
+                #baseline 1- zero velocity
                 zv_latent = last_frame
                 
-                #3. constant velocity setup (last frame + speed * time)
+                #baseline 2- constant velocity (last frame + speed * time)
                 cv_latent = last_frame + (h * velocity)
                 
                 '''
@@ -175,7 +173,7 @@ def main():
                 
 
     #print the final table for the report
-    print("\n================ FINAL MPJPE EVALUATION (Meters) ================")
+    print("\n Evaluation of MPJPE error (in meters)")
     print(f"{'Time (s)':<10} | {'Transformer':<15} | {'Zero-Vel':<15} | {'Const-Vel':<15}")
     print("-" * 65)
     
@@ -185,13 +183,13 @@ def main():
         m_zv    = np.mean(stats['zv'][h])
         m_cv    = np.mean(stats['cv'][h])
         
-        #bold the transformer score if it beats the baselines
+        #adding star if it beats the baselines
         trans_str = f"{m_trans:>15.4f}"
         if m_trans < m_zv and m_trans < m_cv:
             trans_str = f"*{m_trans:>13.4f}*" #adding asterisks to highlight the winner
             
         print(f"{t:>8.3f}s | {trans_str} | {m_zv:>15.4f} | {m_cv:>15.4f}")
-    print("=================================================================")
+    print("--END--")
     
     #extract faces from the body model for trimesh
     faces = c2c(bm.f)
