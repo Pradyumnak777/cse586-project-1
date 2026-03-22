@@ -90,7 +90,7 @@ def main():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     fps = 30
     context_window = 2 #in seconds
-    pred_window = 0.033 #in seconds. predict 0.033s into the future
+    pred_window = 0.033 #in seconds. predict 0.033s into the future. This is basically the next frame- 1/30.
     batch_size = 128    
     
     latents_path = os.path.join(BASE_DIR, "vposer_latents.pt")
@@ -107,7 +107,7 @@ def main():
     # window = 1 #predicting "immediate" frame, true autorgression? change to 5 to predict 5 frames COLLECTIVELY
     # context = 20  #looking at 20 frames/poses
     
-    epochs = 10
+    epochs = 50
     lr = 2e-4
     noise_std = 0.01 #why this? does it help?
 
@@ -238,7 +238,7 @@ def main():
         #     avg_test_tot = test_total_sum / len(test_loader)
         #     print(f"Epoch {ep} TEST  | Total: {avg_test_tot:.4f} | Latent (MAE): {avg_test_lat:.4f} | Physical (MPJPE): {avg_test_mpj:.4f}m", flush=True)
             
-        save_dir = os.path.join(BASE_DIR, f"test_models_context_{context_window}_k_1")
+        save_dir = os.path.join(BASE_DIR, f"test_models_context_{context_window}_sec")
         os.makedirs(save_dir, exist_ok=True)
         torch.save(model.state_dict(), os.path.join(save_dir, f"transformer_ep{ep}.pt"))
 

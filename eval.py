@@ -8,6 +8,10 @@ from human_body_prior.tools.model_loader import load_model
 from human_body_prior.body_model.body_model import BodyModel
 from model import NextLatentTransformer
 from human_body_prior.models.vposer_model import VPoser
+import trimesh
+from human_body_prior.tools.omni_tools import copy2cpu as c2c
+
+
 
 
 #helper to compute stats so we can un-normalize later
@@ -86,7 +90,7 @@ def main():
     model = NextLatentTransformer(d_in=32, d_model=128, nhead=4, num_layers=3, dropout=0.1).to(device)
     
     #load model
-    model_path = os.path.join(BASE_DIR, "test_models_context_2/transformer_ep5.pt")
+    model_path = os.path.join(BASE_DIR, "test_models_context_2_sec/transformer_ep40.pt")
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
@@ -169,9 +173,6 @@ def main():
                 stats['zv'][h].append(err_zv.item())
                 stats['cv'][h].append(err_cv.item())
                 
-                '''
-                IF the transformer error is better than ZV and CV, it means something has been learnt!
-                '''
 
     #print the final table for the report
     print("\n================ FINAL MPJPE EVALUATION (Meters) ================")
@@ -191,6 +192,53 @@ def main():
             
         print(f"{t:>8.3f}s | {trans_str} | {m_zv:>15.4f} | {m_cv:>15.4f}")
     print("=================================================================")
+    
+    #extract faces from the body model for trimesh
+    faces = c2c(bm.f)
+    
+    seq_scores = {}
+    for key in test_keys:
+        #average the error across all time horizons for this specific key
+        avg_err = np.mean([np.mean(stats['trans'][h_idx]) for h_idx in horizons])
+        seq_scores[key] = avg_err
+        
+    sorted_keys = sorted(seq_scores, key=seq_scores.get)
+    best_key = sorted_keys[0]
+    worst_key = sorted_keys[-1]
+    # avg_key = sorted_keys[len(sorted_keys)//2]
 
+    print(f"best: {best_key} | worst: {worst_key}")
+    
+    
+    h_eval = 30 #looking at body poses at the 1st second
+    
+    # print("\n A good example(high pred score):")
+    # visualize_comparison(best_key, h_eval, model, test_latents, mean, std, vp, bm, device, faces)
+    
+    # print("\nA bad example(low pred score):")
+    # visualize_comparison(worst_key, h_eval, model, test_latents, mean, std, vp, bm, device, faces)
+    
+    viz_stuff = {
+        'best': {
+            'key': best_key,
+            'gt_latent': test_latents[best_key][60 + h_eval], # 1.0s mark, first 60 is context(set to 2 sec)
+            'init_context': test_latents[best_key][:60]
+        },
+        'worst': {
+            'key': worst_key,
+            'gt_latent': test_latents[worst_key][60 + h_eval],
+            'init_context': test_latents[worst_key][:60]
+        },
+        'stats': {
+            'mean': mean.cpu(),
+            'std': std.cpu()
+        }
+    }
+
+    torch.save(viz_stuff, 'viz.pt')
+    print("viz stuff saved for portability..")
+    
+            
+                
 if __name__ == "__main__":
     main()
