@@ -13,19 +13,6 @@ from human_body_prior.tools.omni_tools import copy2cpu as c2c
 import matplotlib.pyplot as plt
 
 
-
-#helper to compute stats
-def compute_train_stats(train_latents: dict, max_frames_per_seq=2000):
-    chunks = []
-    for _, v in train_latents.items():
-        if not isinstance(v, torch.Tensor) or v.ndim != 2:
-            continue
-        chunks.append(v[:max_frames_per_seq].float())
-    cat = torch.cat(chunks, dim=0) 
-    mean = cat.mean(dim=0)
-    std = cat.std(dim=0).clamp_min(1e-6)
-    return mean, std
-
 #the loop that makes model predict the future 
 '''
     ok so for rollout, its like autoregression. 
@@ -46,6 +33,49 @@ def rollout_autoreg(model, init_context_norm, H, device):
             preds.append(y.detach().cpu())
             ctx = torch.cat([ctx[1:], y.unsqueeze(0)], dim=0)
     return torch.stack(preds, dim=0)
+
+#helper to compute stats
+def compute_train_stats(train_latents: dict, max_frames_per_seq=2000):
+    chunks = []
+    for _, v in train_latents.items():
+        if not isinstance(v, torch.Tensor) or v.ndim != 2:
+            continue
+        chunks.append(v[:max_frames_per_seq].float())
+    cat = torch.cat(chunks, dim=0) 
+    mean = cat.mean(dim=0)
+    std = cat.std(dim=0).clamp_min(1e-6)
+    return mean, std
+
+def plot_mpjpe_divergence(all_frame_stats, fps):
+    #take mean error at each frame across all test sequences
+    final_errors = {
+        'trans': [np.mean(frame_list) for frame_list in all_frame_stats['trans']],
+        'zv': [np.mean(frame_list) for frame_list in all_frame_stats['zv']],
+        'cv': [np.mean(frame_list) for frame_list in all_frame_stats['cv']]
+    }
+    
+    #build time axis in seconds
+    num_frames = len(final_errors['trans'])
+    time_steps = np.arange(1, num_frames + 1) / fps
+    
+    plt.figure(figsize=(10, 6))
+    
+    plt.plot(time_steps, final_errors['trans'], label='transformer', color='hotpink', linewidth=2)
+    
+    #ts are baseline curves
+    plt.plot(time_steps, final_errors['zv'], label='zero velocity', color='gray', linestyle='--')
+    plt.plot(time_steps, final_errors['cv'], label='constant velocity', color='royalblue', linestyle=':')
+    
+    plt.title('mpjpe divergence over five seconds')
+    plt.xlabel('time into the future (seconds)')
+    plt.ylabel('mean error (meters)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    os.makedirs('eval_viz', exist_ok=True)
+    plt.savefig('eval_viz/divergence_plot.png')
+    print('divergence plot saved to eval_viz folder')
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -105,15 +135,15 @@ def main():
         'zv':    {h: [] for h in horizons}, #zero velocity
         'cv':    {h: [] for h in horizons} #const. velocity
     }
-    
-    # #track every single frame for plotting..
-    # all_frame_stats = {
-    #     'trans': [[] for _ in range(max_h)], #transf output
-    #     'zv':    [[] for _ in range(max_h)], #zero vel output
-    #     'cv':    [[] for _ in range(max_h)] #const vel output
-    # }
 
-    print("\nstarting evaluation... ")
+    #track every single frame for the plot
+    all_frame_stats = {
+        'trans': [[] for _ in range(max_h)],
+        'zv':    [[] for _ in range(max_h)],
+        'cv':    [[] for _ in range(max_h)]
+    }
+
+    print("\nstarting combined evaluation... ")
     
     with torch.no_grad():
         for key in test_keys:
@@ -122,11 +152,11 @@ def main():
             if full_seq.shape[0] < (c_frames + max_h):
                 continue 
                 
-            #get ocntext
+            #get context
             init_context = full_seq[:c_frames] #c_frames is context, but in frames
             init_context_norm = (init_context - mean) / std
             
-            #doing rollout
+            #doing rollout once per sequence
             preds_norm = rollout_autoreg(model, init_context_norm, H=max_h, device=device) #rollout for 150 frames
             
             #get gt (already un-normalized)
@@ -136,55 +166,38 @@ def main():
             penultimate_frame = init_context[-2] #59th frame
             velocity = last_frame - penultimate_frame
             
-            #evaluate only at the specific horizons to save computation time
-            for h in horizons:
-                #transformer output using rollout (did just before)
+            #loop through every frame to save both table and plot data
+            for h in range(1, max_h + 1):
                 trans_latent = (preds_norm[h-1].to(device) * std) + mean #un_normed transformer output at this 'h' step
                 
-                #baseline 1- zero velocity
                 zv_latent = last_frame
-                
-                #baseline 2- constant velocity (last frame + speed * time)
                 cv_latent = last_frame + (h * velocity)
-                
-                '''
-                zero velocity: If just the same frame is given as input, what will the transformer predict?
-                constatn velocity:  
-                '''
-                
-                #4. ground truth for this specific frame
                 gt_latent = gt_rollout[h-1]
                 
-                #decode all 4 latents into smpl poses
                 trans_pose = pose_decode(vp, trans_latent.unsqueeze(0))
                 zv_pose    = pose_decode(vp, zv_latent.unsqueeze(0))
                 cv_pose    = pose_decode(vp, cv_latent.unsqueeze(0))
                 gt_pose    = pose_decode(vp, gt_latent.unsqueeze(0))
                 
-                #push poses through the body model to get 3d xyz joints
-                #slice to 23 to ignore hands/face if present
                 trans_joints = bm(pose_body=trans_pose).Jtr[:, :23, :]
                 zv_joints    = bm(pose_body=zv_pose).Jtr[:, :23, :]
                 cv_joints    = bm(pose_body=cv_pose).Jtr[:, :23, :]
                 gt_joints    = bm(pose_body=gt_pose).Jtr[:, :23, :]
                 
-                #calculate mpjpe (mean euclidean distance)
                 err_trans = torch.mean(torch.norm(trans_joints - gt_joints, dim=-1))
                 err_zv    = torch.mean(torch.norm(zv_joints - gt_joints, dim=-1))
                 err_cv    = torch.mean(torch.norm(cv_joints - gt_joints, dim=-1))
                 
-                # #for plotting
-                # all_frame_stats['trans'][h-1].append(err_trans.item())
-                # all_frame_stats['zv'][h-1].append(err_zv.item())
-                # all_frame_stats['cv'][h-1].append(err_cv.item())
-                
-                #save to our stats tracker
-                stats['trans'][h].append(err_trans.item())
-                stats['zv'][h].append(err_zv.item())
-                stats['cv'][h].append(err_cv.item())
+                all_frame_stats['trans'][h-1].append(err_trans.item())
+                all_frame_stats['zv'][h-1].append(err_zv.item())
+                all_frame_stats['cv'][h-1].append(err_cv.item())
+
+                if h in horizons:
+                    stats['trans'][h].append(err_trans.item())
+                    stats['zv'][h].append(err_zv.item())
+                    stats['cv'][h].append(err_cv.item())
                 
 
-    #print the final table for the report
     print("\n Evaluation of MPJPE error (in meters)")
     print(f"{'Time (s)':<10} | {'Transformer':<15} | {'Zero-Vel':<15} | {'Const-Vel':<15}")
     print("-" * 65)
@@ -203,8 +216,8 @@ def main():
         print(f"{t:>8.3f}s | {trans_str} | {m_zv:>15.4f} | {m_cv:>15.4f}")
     print("--END--")
     
-    
-    # plot_mpjpe_divergence(all_frame_stats, fps)
+    #generate the plot after everything is done
+    plot_mpjpe_divergence(all_frame_stats, fps)
     
     #extract faces from the body model for trimesh
     faces = c2c(bm.f)
@@ -218,18 +231,10 @@ def main():
     sorted_keys = sorted(seq_scores, key=seq_scores.get)
     best_key = sorted_keys[0]
     worst_key = sorted_keys[-1]
-    # avg_key = sorted_keys[len(sorted_keys)//2]
 
     print(f"best: {best_key} | worst: {worst_key}")
     
-    
     h_eval = 30 #looking at body poses at the 1st second
-    
-    # print("\n A good example(high pred score):")
-    # visualize_comparison(best_key, h_eval, model, test_latents, mean, std, vp, bm, device, faces)
-    
-    # print("\nA bad example(low pred score):")
-    # visualize_comparison(worst_key, h_eval, model, test_latents, mean, std, vp, bm, device, faces)
     
     viz_stuff = {
         'best': {
@@ -251,7 +256,5 @@ def main():
     torch.save(viz_stuff, 'viz.pt')
     print("viz stuff saved for portability..")
     
-            
-                
 if __name__ == "__main__":
     main()
